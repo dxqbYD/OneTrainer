@@ -2,6 +2,7 @@ import json
 import os
 import traceback
 from collections.abc import Callable
+from contextlib import suppress
 
 from modules.util import path_util
 from modules.util.config.TrainConfig import TrainConfig
@@ -155,7 +156,14 @@ class TopBar:
         name = path_util.safe_filename(name)
         path = path_util.canonical_join("training_presets", f"{name}.json")
         with open(path, "w") as f:
-            json.dump(self.train_config.to_dict(), f, indent=4)
+            json.dump(self.train_config.to_dict(secrets=False), f, indent=4)
+
+        return path
+
+    def __save_secrets(self) -> str:
+        path = "secrets.json"
+        with open(path, "w") as f:
+            json.dump(self.train_config.to_dict(secrets=True), f, indent=4)
 
         return path
 
@@ -188,6 +196,17 @@ class TopBar:
             validate_callback=lambda x: not x.startswith("#")
         )
 
+    @staticmethod
+    def __merge_dicts(a: dict, b: dict):
+        for key,value in b.items():
+            if key in a:
+                if isinstance(value,dict):
+                    TopBar.__merge_dicts(a[key],value)
+                elif a[key] != value:
+                    raise ValueError("Secrets file does not match config file")
+            else:
+                a[key]=value
+
     def __load_current_config(self, filename):
         try:
             basename = os.path.basename(filename)
@@ -195,6 +214,10 @@ class TopBar:
 
             with open(filename, "r") as f:
                 loaded_dict = json.load(f)
+                with suppress(FileNotFoundError, ValueError), open("secrets.json", "r") as secrets_f:
+                    secrets=json.load(secrets_f)
+                    self.__merge_dicts(loaded_dict,secrets)
+
                 default_config = TrainConfig.default_values()
                 if is_built_in_preset:
                     # always assume built-in configs are saved in the most recent version
@@ -219,3 +242,4 @@ class TopBar:
 
     def save_default(self):
         self.__save_to_file("#")
+        self.__save_secrets()

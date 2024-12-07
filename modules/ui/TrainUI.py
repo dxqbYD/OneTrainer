@@ -614,7 +614,7 @@ class TrainUI(ctk.CTk):
 
         if file_path:
             with open(file_path, "w") as f:
-                json.dump(self.train_config.to_pack_dict(), f, indent=4)
+                json.dump(self.train_config.to_pack_dict(secrets=False), f, indent=4)
 
     def sample_now(self):
         train_commands = self.training_commands

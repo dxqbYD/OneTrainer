@@ -19,13 +19,18 @@ class BaseConfig:
         self.types = {}
         self.nullables = {}
         self.default_values = {}
+        self.secrets = {}
         for (name, value, var_type, nullable) in data:
             setattr(self, name, value)
             self.types[name] = var_type
             self.nullables[name] = nullable
             self.default_values[name] = value
+            self.secrets[name] = False
 
-    def to_dict(self) -> dict:
+    def set_secret(self,name : str):
+        self.secrets[name] = True
+
+    def to_dict(self, secrets=None) -> dict:
         data = {
             '__version': self.config_version,
         }
@@ -33,7 +38,11 @@ class BaseConfig:
         for name in self.types:
             value = getattr(self, name)
             if issubclass(self.types[name], BaseConfig):
-                data[name] = value.to_dict()
+                sub = value.to_dict(secrets)
+                if len(sub) > 1: #more than __version
+                    data[name] = sub
+            elif secrets is not None and secrets != self.secrets[name]:
+                continue
             elif self.types[name] is list or get_origin(self.types[name]) is list:
                 if len(get_args(self.types[name])) > 0 and issubclass(get_args(self.types[name])[0], BaseConfig):
                     data[name] = [le.to_dict() for le in value] if value is not None else None

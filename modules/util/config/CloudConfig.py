@@ -78,4 +78,11 @@ class CloudConfig(BaseConfig):
         data.append(("on_error", CloudAction.NONE, CloudAction, False))
         data.append(("on_detached_finish", CloudAction.NONE, CloudAction, False))
         data.append(("on_detached_error", CloudAction.NONE, CloudAction, False))
-        return CloudConfig(data)
+        config=CloudConfig(data)
+        config.set_secret("api_key")
+        config.set_secret("huggingface_token")
+        config.set_secret("host")
+        config.set_secret("port")
+        config.set_secret("user")
+        config.set_secret("id")
+        return config

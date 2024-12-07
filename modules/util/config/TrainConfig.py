@@ -654,8 +654,8 @@ class TrainConfig(BaseConfig):
 
         return config.to_dict()
 
-    def to_pack_dict(self) -> dict:
-        config = TrainConfig.default_values().from_dict(self.to_dict())
+    def to_pack_dict(self,secrets=None) -> dict:
+        config = TrainConfig.default_values().from_dict(self.to_dict(secrets=secrets))
 
         if config.concepts is None:
             with open(config.concept_file_name, 'r') as f:
@@ -671,10 +671,10 @@ class TrainConfig(BaseConfig):
                     samples[i] = SampleConfig.default_values().from_dict(samples[i])
                 config.samples = samples
 
-        return config.to_dict()
+        return config.to_dict(secrets)
 
-    def to_unpacked_config(self) -> 'TrainConfig':
-        config = TrainConfig.default_values().from_dict(self.to_dict())
+    def to_unpacked_config(self,secrets=None) -> 'TrainConfig':
+        config = TrainConfig.default_values().from_dict(self.to_dict(secrets=secrets))
         config.concepts = None
         config.samples = None
         return config
