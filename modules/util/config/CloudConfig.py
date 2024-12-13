@@ -89,4 +89,5 @@ class CloudConfig(BaseConfig):
         config.set_secret("port")
         config.set_secret("user")
         config.set_secret("id")
+        config.set_secret("jupyter_password")
         return config
