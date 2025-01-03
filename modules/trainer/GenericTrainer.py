@@ -37,6 +37,9 @@ from torch.utils.hooks import RemovableHandle
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms.functional import pil_to_tensor
 
+from diffusers import FluxPriorReduxPipeline
+from diffusers.utils import load_image
+
 from PIL.Image import Image
 from tqdm import tqdm
 
@@ -136,6 +139,11 @@ class GenericTrainer(BaseTrainer):
         self.model_setup.setup_model(self.model, self.config)
         self.model.to(self.temp_device)
         self.model.eval()
+
+        self.callbacks.on_update_status("Loading redux")
+        self.redux_pipe = FluxPriorReduxPipeline.from_pretrained("black-forest-labs/FLUX.1-Redux-dev", torch_dtype=torch.bfloat16).to(self.train_device)
+        self.redux_cache = {}
+        self.redux_sample=None
         torch_gc()
 
         self.callbacks.on_update_status("creating the data loader/caching")
@@ -257,6 +265,7 @@ class GenericTrainer(BaseTrainer):
                         image_format=self.config.sample_image_format,
                         on_sample=on_sample,
                         on_update_progress=on_update_progress,
+                        #redux=self.redux_sample
                     )
                 except Exception:
                     traceback.print_exc()
@@ -673,7 +682,22 @@ class GenericTrainer(BaseTrainer):
                 self.callbacks.on_update_status("training")
 
                 with TorchMemoryRecorder(enabled=False):
+                    assert len(batch['image_path']) == 1
+                    print(f"\n\n{batch['image_path'][0]} ==> {batch['prompt'][0]}")
+                    if batch['image_path'][0] in self.redux_cache:
+                        redux = self.redux_cache[batch['image_path'][0]]
+                    else:
+                        image = load_image(batch['image_path'][0])
+                        print("Redux...")
+                        self.redux_sample = redux = self.redux_cache[batch['image_path'][0]] = self.redux_pipe(image)
+
+                    with torch.no_grad():
+                        self.model.transformer_lora.remove_hook_from_module()
+                        redux_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress,redux=redux)
+                        self.model.transformer_lora.hook_to_module()
+
                     model_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress)
+                    model_output_data['target']=redux_output_data['predicted']
 
                     loss = self.model_setup.calculate_loss(self.model, batch, model_output_data, self.config)
 

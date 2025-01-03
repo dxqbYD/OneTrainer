@@ -260,6 +260,7 @@ class BaseFluxSetup(
             train_progress: TrainProgress,
             *,
             deterministic: bool = False,
+            redux = None,
     ) -> dict:
         with model.autocast_context:
             generator = torch.Generator(device=config.train_device)
@@ -270,7 +271,6 @@ class BaseFluxSetup(
 
             vae_scaling_factor = model.vae.config['scaling_factor']
             vae_shift_factor = model.vae.config['shift_factor']
-
             text_encoder_output, pooled_text_encoder_output = model.encode_text(
                 train_device=self.train_device,
                 batch_size=batch['latent_image'].shape[0],
@@ -280,10 +280,14 @@ class BaseFluxSetup(
                 tokens_mask_2=batch.get("tokens_mask_2"),
                 text_encoder_1_layer_skip=config.text_encoder_layer_skip,
                 text_encoder_2_layer_skip=config.text_encoder_2_layer_skip,
-                pooled_text_encoder_1_output=batch['text_encoder_1_pooled_state'] \
-                    if 'text_encoder_1_pooled_state' in batch and not config.train_text_encoder_or_embedding() else None,
-                text_encoder_2_output=batch['text_encoder_2_hidden_state'] \
-                    if 'text_encoder_2_hidden_state' in batch and not config.train_text_encoder_2_or_embedding() else None,
+                pooled_text_encoder_1_output=redux[1] if redux is not None else (
+                    batch['text_encoder_1_pooled_state'] \
+                    if 'text_encoder_1_pooled_state' in batch and not config.train_text_encoder_or_embedding() else None
+                    ),
+                text_encoder_2_output=redux[0] if redux is not None else (
+                    batch['text_encoder_2_hidden_state'] \
+                    if 'text_encoder_2_hidden_state' in batch and not config.train_text_encoder_2_or_embedding() else None
+                    ),
                 text_encoder_1_dropout_probability=config.text_encoder.dropout_probability,
                 text_encoder_2_dropout_probability=config.text_encoder_2.dropout_probability,
                 apply_attention_mask=config.prior.attention_mask,
