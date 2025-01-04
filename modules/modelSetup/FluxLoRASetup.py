@@ -71,6 +71,12 @@ class FluxLoRASetup(
                 learning_rate=config.prior.learning_rate,
             ))
 
+        parameter_group_collection.add_group(NamedParameterGroup(
+            unique_name="output_embedding",
+            parameters=[model.output_embedding],
+            learning_rate=config.embedding_learning_rate,
+        ))
+
         return parameter_group_collection
 
     def __setup_requires_grad(
@@ -116,6 +122,7 @@ class FluxLoRASetup(
                          not self.stop_prior_training_elapsed(config, model.train_progress)
             model.transformer_lora.requires_grad_(train_transformer)
 
+        model.output_embedding.requires_grad_(True)
 
     def setup_model(
             self,
