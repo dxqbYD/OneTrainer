@@ -65,6 +65,7 @@ class FluxSampler(BaseModelSampler):
             force_last_timestep: bool = False,
             prior_attention_mask: bool = False,
             on_update_progress: Callable[[int, int], None] = lambda _, __: None,
+            redux=None,
     ) -> Image.Image:
         with self.model.autocast_context:
             generator = torch.Generator(device=self.train_device)
@@ -143,7 +144,7 @@ class FluxSampler(BaseModelSampler):
             if "generator" in set(inspect.signature(noise_scheduler.step).parameters.keys()):
                 extra_step_kwargs["generator"] = generator
 
-            text_ids = torch.zeros(prompt_embedding.shape[1], 3, device=self.train_device)
+            text_ids = torch.zeros(prompt_embedding.shape[1] if redux is None else redux[0].shape[1], 3, device=self.train_device)
 
             self.model.transformer_to(self.train_device)
             for i, timestep in enumerate(tqdm(timesteps, desc="sampling")):
@@ -157,13 +158,15 @@ class FluxSampler(BaseModelSampler):
                 else:
                     guidance = None
 
+                if redux is not None:
+                    print("redux sampling")
                 # predict the noise residual
                 noise_pred = transformer(
                     hidden_states=latent_model_input.to(dtype=self.model.train_dtype.torch_dtype()),
                     timestep=expanded_timestep / 1000,
                     guidance=guidance.to(dtype=self.model.train_dtype.torch_dtype()),
-                    pooled_projections=pooled_prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
-                    encoder_hidden_states=prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
+                    pooled_projections=pooled_prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()) if redux is None else redux[1],
+                    encoder_hidden_states=prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()) if redux is None else redux[0],
                     txt_ids=text_ids.to(dtype=self.model.train_dtype.torch_dtype()),
                     img_ids=image_ids.to(dtype=self.model.train_dtype.torch_dtype()),
                     joint_attention_kwargs=None,
@@ -470,6 +473,7 @@ class FluxSampler(BaseModelSampler):
             image_format: ImageFormat,
             on_sample: Callable[[Image], None] = lambda _: None,
             on_update_progress: Callable[[int, int], None] = lambda _, __: None,
+            redux = None,
     ):
         prompt = self.model.add_embeddings_to_prompt(sample_config.prompt)
         negative_prompt = self.model.add_embeddings_to_prompt(sample_config.negative_prompt)
@@ -512,6 +516,7 @@ class FluxSampler(BaseModelSampler):
                 force_last_timestep=sample_config.force_last_timestep,
                 prior_attention_mask=sample_config.prior_attention_mask,
                 on_update_progress=on_update_progress,
+                redux=redux,
             )
 
         os.makedirs(Path(destination).parent.absolute(), exist_ok=True)

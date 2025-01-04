@@ -69,6 +69,8 @@ class FluxModel(BaseModel):
     embedding_wrapper_1: AdditionalEmbeddingWrapper | None
     embedding_wrapper_2: AdditionalEmbeddingWrapper | None
 
+    output_embedding: Tensor | None
+
     # persistent lora training data
     text_encoder_1_lora: LoRAModuleWrapper | None
     text_encoder_2_lora: LoRAModuleWrapper | None

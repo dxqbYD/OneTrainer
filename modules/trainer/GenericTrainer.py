@@ -37,6 +37,9 @@ from torch.utils.hooks import RemovableHandle
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms.functional import pil_to_tensor
 
+from diffusers import FluxPriorReduxPipeline
+from diffusers.utils import load_image
+
 from PIL.Image import Image
 from tqdm import tqdm
 
@@ -129,13 +132,23 @@ class GenericTrainer(BaseTrainer):
         )
         self.model.train_config = self.config
 
+        self.callbacks.on_update_status("Loading redux")
+        self.redux_pipe = FluxPriorReduxPipeline.from_pretrained("black-forest-labs/FLUX.1-Redux-dev", torch_dtype=torch.bfloat16).to(self.train_device)
+
+
         self.callbacks.on_update_status("running model setup")
 
         self.model_setup.setup_optimizations(self.model, self.config)
         self.model_setup.setup_train_device(self.model, self.config)
+
+        image = load_image("redux_init.jpg")
+        self.redux_embedding = self.redux_pipe(image)
+        self.model.output_embedding = self.redux_embedding[0]
+
         self.model_setup.setup_model(self.model, self.config)
         self.model.to(self.temp_device)
         self.model.eval()
+
         torch_gc()
 
         self.callbacks.on_update_status("creating the data loader/caching")
@@ -257,6 +270,7 @@ class GenericTrainer(BaseTrainer):
                         image_format=self.config.sample_image_format,
                         on_sample=on_sample,
                         on_update_progress=on_update_progress,
+                        redux=self.redux_embedding
                     )
                 except Exception:
                     traceback.print_exc()
@@ -673,7 +687,8 @@ class GenericTrainer(BaseTrainer):
                 self.callbacks.on_update_status("training")
 
                 with TorchMemoryRecorder(enabled=False):
-                    model_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress)
+                    print(self.redux_embedding[0])
+                    model_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress, redux = self.redux_embedding)
 
                     loss = self.model_setup.calculate_loss(self.model, batch, model_output_data, self.config)
 
