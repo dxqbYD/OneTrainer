@@ -581,15 +581,18 @@ class GenericTrainer(BaseTrainer):
         lr_scheduler = None
         accumulated_loss = 0.0
         ema_loss = None
+        ff_steps = 0
         for _epoch in tqdm(range(train_progress.epoch, self.config.epochs, 1), desc="epoch"):
             self.callbacks.on_update_status("starting epoch/caching")
 
             if self.config.latent_caching:
                 self.data_loader.get_data_set().start_next_epoch()
+                self.validation_data_loader.get_data_set().start_next_epoch()
                 self.model_setup.setup_train_device(self.model, self.config)
             else:
                 self.model_setup.setup_train_device(self.model, self.config)
                 self.data_loader.get_data_set().start_next_epoch()
+                self.validation_data_loader.get_data_set().start_next_epoch()
 
             # Special case for schedule-free optimizers, which need train()
             # called before training. Can and should move this to a callback
@@ -618,6 +621,10 @@ class GenericTrainer(BaseTrainer):
             current_epoch_length = self.data_loader.get_data_set().approximate_length()
             step_tqdm = tqdm(self.data_loader.get_data_loader(), desc="step", total=current_epoch_length,
                              initial=train_progress.epoch_step)
+
+            validation_dataset = iter(self.validation_data_loader.get_data_loader())
+            ff_interval = 4
+
             for batch in step_tqdm:
                 if self.__needs_sample(train_progress) or self.commands.get_and_reset_sample_default_command():
                     self.__enqueue_sample_during_training(
@@ -663,6 +670,17 @@ class GenericTrainer(BaseTrainer):
                 self.callbacks.on_update_status("training")
 
                 with TorchMemoryRecorder(enabled=False):
+                    ff_step = train_progress.global_step % ff_interval == 0
+                    if ff_step:
+                        validation_batch = next(validation_dataset, None)
+                        if not validation_batch:
+                            self.validation_data_loader.get_data_set().start_next_epoch()
+                            validation_dataset = iter(self.validation_data_loader.get_data_loader())
+                            validation_batch = next(validation_dataset)
+                        with torch.no_grad():
+                            validation_output_data = self.model_setup.predict(self.model, validation_batch, self.config, train_progress)
+                            validation_reference_loss = self.model_setup.calculate_loss(self.model, batch, validation_output_data, self.config)
+
                     model_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress)
 
                     loss = self.model_setup.calculate_loss(self.model, batch, model_output_data, self.config)
@@ -689,9 +707,25 @@ class GenericTrainer(BaseTrainer):
                         else:
                             if self.config.clip_grad_norm is not None:
                                 nn.utils.clip_grad_norm_(self.parameters, self.config.clip_grad_norm)
-                            self.model.optimizer.step()
 
-                        lr_scheduler.step()  # done before zero_grad, because some lr schedulers need gradients
+                            while True:
+                                self.model.optimizer.step()
+                                lr_scheduler.step()  # done before zero_grad, because some lr schedulers need gradients
+
+                                if not ff_step:
+                                    break
+                                with torch.no_grad():
+                                    validation_output_data = self.model_setup.predict(self.model, validation_batch, self.config, train_progress)
+                                    validation_loss = self.model_setup.calculate_loss(self.model, batch, validation_output_data, self.config)
+                                
+                                    print(f"\n\nvalidation: {validation_loss} < {validation_reference_loss}")
+                                    if validation_loss < validation_reference_loss:
+                                        ff_steps += 1
+                                        print(f"Fast forwarding step {ff_steps}")
+                                        validation_reference_loss = validation_loss
+                                    else:
+                                        break
+                                
                         self.model.optimizer.zero_grad(set_to_none=True)
                         has_gradient = False
 

@@ -429,6 +429,7 @@ class BaseFluxSetup(
                 scaled_latent_image.shape[0],
                 config,
             )
+            print(f"timestep: {timestep}")
 
             scaled_noisy_latent_image, sigma = self._add_noise_discrete(
                 scaled_latent_image,
