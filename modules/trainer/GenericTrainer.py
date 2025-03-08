@@ -622,7 +622,23 @@ class GenericTrainer(BaseTrainer):
                 )
 
             current_epoch_length = self.data_loader.get_data_set().approximate_length()
-            step_tqdm = tqdm(self.data_loader.get_data_loader(), desc="step", total=current_epoch_length,
+            orig_list = list(self.data_loader.get_data_loader())
+            batch_list = []
+            for batch in orig_list:
+                assert len(batch['image_path']) == 1
+                if "positive" in batch['image_path'][0]:
+                    negative_path = batch['image_path'][0].replace("positive","negative")
+                    negatives = [item for item in orig_list
+                        if item['image_path'][0] == negative_path
+                        and batch['latent_image'][0].shape == item['latent_image'][0].shape
+                    ]
+                    if len(negatives) == 1:
+                        batch_list.append(batch)
+                        batch_list.append(negatives[0])
+                    else:
+                        print("dropping ", batch['image_path'][0])
+
+            step_tqdm = tqdm(batch_list, desc="step", total=current_epoch_length,
                              initial=train_progress.epoch_step)
             for batch in step_tqdm:
                 if self.__needs_sample(train_progress) or self.commands.get_and_reset_sample_default_command():
@@ -669,6 +685,12 @@ class GenericTrainer(BaseTrainer):
                 self.callbacks.on_update_status("training")
 
                 with TorchMemoryRecorder(enabled=False):
+                    print(batch['image_path'][0])
+                    if "negative" in batch['image_path'][0]:
+                        print("negative")
+                        self.model.transformer_lora.set_alpha(-1)
+                    else:
+                        self.model.transformer_lora.set_alpha(1)
                     model_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress)
 
                     loss = self.model_setup.calculate_loss(self.model, batch, model_output_data, self.config)
@@ -732,6 +754,7 @@ class GenericTrainer(BaseTrainer):
 
                         self.one_step_trained = True
 
+                self.model.transformer_lora.set_alpha(1)
                 if self.config.validation:
                     self.__validate(train_progress)
 

@@ -330,6 +330,9 @@ class LoRAModule(PeftBase):
         # TODO
         pass
 
+    def set_alpha(self,alpha):
+        self.alpha[None] = alpha
+
 
 class DoRAModule(LoRAModule):
     """Weight-decomposed low rank adaptation.
@@ -537,6 +540,12 @@ class LoRAModuleWrapper:
         """
         for module in self.lora_modules.values():
             module.remove_hook_from_module()
+
+    def set_alpha(self,alpha):
+        self.alpha=alpha
+        for module in self.lora_modules.values():
+            module.set_alpha(alpha)
+
 
     def apply_to_module(self):
         """
