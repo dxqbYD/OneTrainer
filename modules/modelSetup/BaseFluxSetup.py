@@ -224,6 +224,9 @@ class BaseFluxSetup(
             train_progress: TrainProgress,
             *,
             deterministic: bool = False,
+            latent_input = None,
+            timestep = None,
+            text = None,
     ) -> dict:
         with model.autocast_context:
             batch_seed = 0 if deterministic else train_progress.global_step
@@ -236,33 +239,49 @@ class BaseFluxSetup(
             vae_scaling_factor = model.vae.config['scaling_factor']
             vae_shift_factor = model.vae.config['shift_factor']
 
-            text_encoder_output, pooled_text_encoder_output = model.encode_text(
-                train_device=self.train_device,
-                batch_size=batch['latent_image'].shape[0],
-                rand=rand,
-                tokens_1=batch.get("tokens_1"),
-                tokens_2=batch.get("tokens_2"),
-                tokens_mask_2=batch.get("tokens_mask_2"),
-                text_encoder_1_layer_skip=config.text_encoder_layer_skip,
-                text_encoder_2_layer_skip=config.text_encoder_2_layer_skip,
-                pooled_text_encoder_1_output=batch['text_encoder_1_pooled_state'] \
-                    if 'text_encoder_1_pooled_state' in batch and not config.train_text_encoder_or_embedding() else None,
-                text_encoder_2_output=batch['text_encoder_2_hidden_state'] \
-                    if 'text_encoder_2_hidden_state' in batch and not config.train_text_encoder_2_or_embedding() else None,
-                text_encoder_1_dropout_probability=config.text_encoder.dropout_probability,
-                text_encoder_2_dropout_probability=config.text_encoder_2.dropout_probability,
-                apply_attention_mask=config.prior.attention_mask,
-            )
+            if text is None:
+                text_encoder_output, pooled_text_encoder_output = model.encode_text(
+                    train_device=self.train_device,
+                    batch_size=batch['latent_image'].shape[0],
+                    rand=rand,
+                    tokens_1=batch.get("tokens_1"),
+                    tokens_2=batch.get("tokens_2"),
+                    tokens_mask_2=batch.get("tokens_mask_2"),
+                    text_encoder_1_layer_skip=config.text_encoder_layer_skip,
+                    text_encoder_2_layer_skip=config.text_encoder_2_layer_skip,
+                    pooled_text_encoder_1_output=batch['text_encoder_1_pooled_state'] \
+                        if 'text_encoder_1_pooled_state' in batch and not config.train_text_encoder_or_embedding() else None,
+                    text_encoder_2_output=batch['text_encoder_2_hidden_state'] \
+                        if 'text_encoder_2_hidden_state' in batch and not config.train_text_encoder_2_or_embedding() else None,
+                    text_encoder_1_dropout_probability=config.text_encoder.dropout_probability,
+                    text_encoder_2_dropout_probability=config.text_encoder_2.dropout_probability,
+                    apply_attention_mask=config.prior.attention_mask,
+                )
+            else:
+                text_encoder_output, pooled_text_encoder_output = model.encode_text(
+                    train_device=self.train_device,
+                    batch_size=batch['latent_image'].shape[0],
+                    rand=rand,
+                    text=text,
+                    text_encoder_1_layer_skip=config.text_encoder_layer_skip,
+                    text_encoder_2_layer_skip=config.text_encoder_2_layer_skip,
+                    text_encoder_1_dropout_probability=config.text_encoder.dropout_probability,
+                    text_encoder_2_dropout_probability=config.text_encoder_2.dropout_probability,
+                    apply_attention_mask=config.prior.attention_mask,
+                )
 
-            latent_image = batch['latent_image']
-            scaled_latent_image = (latent_image - vae_shift_factor) * vae_scaling_factor
+            if latent_input is None:
+                latent_image = batch['latent_image']
+                scaled_latent_image = (latent_image - vae_shift_factor) * vae_scaling_factor
 
-            scaled_latent_conditioning_image = None
-            if config.model_type.has_conditioning_image_input():
-                scaled_latent_conditioning_image = \
-                    (batch['latent_conditioning_image'] - vae_shift_factor) * vae_scaling_factor
+                scaled_latent_conditioning_image = None
+                if config.model_type.has_conditioning_image_input():
+                    scaled_latent_conditioning_image = \
+                        (batch['latent_conditioning_image'] - vae_shift_factor) * vae_scaling_factor
 
-            latent_noise = self._create_noise(scaled_latent_image, config, generator)
+                latent_noise = self._create_noise(scaled_latent_image, config, generator)
+            else:
+                latent_noise = None
 
             if is_align_prop_step and not deterministic:
                 raise NotImplementedError
@@ -386,29 +405,30 @@ class BaseFluxSetup(
                 #     'loss_type': 'align_prop',
                 #     'predicted': predicted_image,
                 # }
-            timestep = self._get_timestep_discrete(
-                model.noise_scheduler.config['num_train_timesteps'],
-                deterministic,
-                generator,
-                scaled_latent_image.shape[0],
-                config,
-                latent_height=scaled_latent_image.shape[-2],
-                latent_width=scaled_latent_image.shape[-1],
-            )
-
-            scaled_noisy_latent_image, sigma = self._add_noise_discrete(
-                scaled_latent_image,
-                latent_noise,
-                timestep,
-                model.noise_scheduler.timesteps,
-            )
-
-            if config.model_type.has_mask_input() and config.model_type.has_conditioning_image_input():
-                latent_input = torch.concat(
-                    [scaled_noisy_latent_image, scaled_latent_conditioning_image, batch['latent_mask']], 1
+            if timestep is None:
+                timestep = self._get_timestep_discrete(
+                    model.noise_scheduler.config['num_train_timesteps'],
+                    deterministic,
+                    generator,
+                    scaled_latent_image.shape[0],
+                    config,
+                    latent_height=scaled_latent_image.shape[-2],
+                    latent_width=scaled_latent_image.shape[-1],
                 )
-            else:
-                latent_input = scaled_noisy_latent_image
+
+            if latent_input is None:
+                scaled_noisy_latent_image, sigma = self._add_noise_discrete(
+                    scaled_latent_image,
+                    latent_noise,
+                    timestep,
+                    model.noise_scheduler.timesteps,
+                )
+                if config.model_type.has_mask_input() and config.model_type.has_conditioning_image_input():
+                    latent_input = torch.concat(
+                        [scaled_noisy_latent_image, scaled_latent_conditioning_image, batch['latent_mask']], 1
+                    )
+                else:
+                    latent_input = scaled_noisy_latent_image
 
             if model.transformer.config.guidance_embeds:
                 guidance = torch.tensor([config.prior.guidance_scale], device=self.train_device)
@@ -454,12 +474,13 @@ class BaseFluxSetup(
                 latent_input.shape[3],
             )
 
-            flow = latent_noise - scaled_latent_image
+
             model_output_data = {
                 'loss_type': 'target',
                 'timestep': timestep,
                 'predicted': predicted_flow,
-                'target': flow,
+                'target': latent_noise - scaled_latent_image if latent_noise is not None else None,
+                'latent_input': latent_input,
             }
 
             if config.debug_mode:
@@ -541,6 +562,19 @@ class BaseFluxSetup(
 
         # model_output_data['prediction_type'] = model.noise_scheduler.config.prediction_type
         return model_output_data
+
+    def image_from_prediction(self, model: FluxModel, config: TrainConfig, latent_input, prediction, timestep):
+        predicted_flow = prediction
+        scaled_noisy_latent_image=latent_input
+        sigma=(timestep + 1) / 1000
+
+        vae_scaling_factor = model.vae.config['scaling_factor']
+        vae_shift_factor = model.vae.config['shift_factor']
+
+        predicted_scaled_latent_image = scaled_noisy_latent_image - predicted_flow * sigma
+        predicted_latent_image = (predicted_scaled_latent_image / vae_scaling_factor) + vae_shift_factor
+        return predicted_latent_image
+
 
     def calculate_loss(
             self,

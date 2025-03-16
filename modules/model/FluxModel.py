@@ -116,6 +116,8 @@ class FluxModel(BaseModel):
         self.transformer_lora = None
         self.lora_state_dict = None
 
+        self.local_text_cache = {}
+
     def all_embeddings(self) -> list[FluxModelEmbedding]:
         return self.additional_embeddings \
                + ([self.embedding] if self.embedding is not None else [])
@@ -210,6 +212,10 @@ class FluxModel(BaseModel):
             pooled_text_encoder_1_output: Tensor = None,
             text_encoder_2_output: Tensor = None,
     ) -> tuple[Tensor, Tensor]:
+
+        if text is not None and text in self.local_text_cache:
+            return self.local_text_cache[text]
+
         # tokenize prompt
         if tokens_1 is None and text is not None and self.tokenizer_1 is not None:
             tokenizer_output = self.tokenizer_1(
@@ -295,6 +301,8 @@ class FluxModel(BaseModel):
                 device=train_device)).float()
             text_encoder_2_output = text_encoder_2_output * dropout_text_encoder_2_mask[:, None, None]
 
+        if text is not None:
+            self.local_text_cache[text] = (text_encoder_2_output, pooled_text_encoder_1_output)
         return text_encoder_2_output, pooled_text_encoder_1_output
 
     def prepare_latent_image_ids(self, height, width, device, dtype):

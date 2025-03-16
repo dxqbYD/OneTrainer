@@ -169,12 +169,14 @@ class FluxLoRASetup(
         text_encoder_1_on_train_device = \
             config.train_text_encoder_or_embedding() \
             or config.align_prop \
-            or not config.latent_caching
+            or not config.latent_caching \
+            or True #slider training
 
         text_encoder_2_on_train_device = \
             config.train_text_encoder_2_or_embedding() \
             or config.align_prop \
-            or not config.latent_caching
+            or not config.latent_caching \
+            or True #slider training
 
         model.text_encoder_1_to(self.train_device if text_encoder_1_on_train_device else self.temp_device)
         model.text_encoder_2_to(self.train_device if text_encoder_2_on_train_device else self.temp_device)

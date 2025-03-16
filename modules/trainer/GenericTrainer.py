@@ -2,6 +2,7 @@ import contextlib
 import copy
 import json
 import os
+import random
 import shutil
 import traceback
 from collections.abc import Callable
@@ -35,6 +36,8 @@ from torch.nn import Parameter
 from torch.utils.hooks import RemovableHandle
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms.functional import pil_to_tensor
+
+from diffusers.image_processor import VaeImageProcessor
 
 import huggingface_hub
 from requests.exceptions import ConnectionError
@@ -564,6 +567,27 @@ class GenericTrainer(BaseTrainer):
             torch.clear_autocast_cache()
             self.model.optimizer.eval()
 
+    def __calculate_shift(
+            self,
+            image_seq_len,
+            base_seq_len: int = 256,
+            max_seq_len: int = 4096,
+            base_shift: float = 0.5,
+            max_shift: float = 1.16,
+    ):
+        m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
+        b = base_shift - m * base_seq_len
+        mu = image_seq_len * m + b
+        return mu
+
+    def save_decoded(self,latent_image,destination):
+        self.model.vae_to(self.config.train_device)
+        image=self.model.vae.decode(latent_image.float(),return_dict=False)[0]
+        image_processor=VaeImageProcessor(vae_scale_factor=self.model.vae.config['scaling_factor'])
+        do_denormalize = [True] * image.shape[0]
+        pil_image = image_processor.postprocess(image, output_type='pil', do_denormalize=do_denormalize)
+        pil_image[0].save(os.path.join(self.config.workspace_dir,destination),format="JPEG")
+
     def train(self):
         train_device = torch.device(self.config.train_device)
 
@@ -622,6 +646,7 @@ class GenericTrainer(BaseTrainer):
                 )
 
             current_epoch_length = self.data_loader.get_data_set().approximate_length()
+
             step_tqdm = tqdm(self.data_loader.get_data_loader(), desc="step", total=current_epoch_length,
                              initial=train_progress.epoch_step)
             for batch in step_tqdm:
@@ -668,10 +693,71 @@ class GenericTrainer(BaseTrainer):
 
                 self.callbacks.on_update_status("training")
 
-                with TorchMemoryRecorder(enabled=False):
-                    model_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress)
+#----------------------------------------------------------------------
+                target_text = "woman"
+                positive_text = "woman, smiling"
+                neutral_text = "woman"
+                negative_text = "woman, frowning"
+                text_guidance = 2
 
-                    loss = self.model_setup.calculate_loss(self.model, batch, model_output_data, self.config)
+                generate = False
+                sample_text = random.choice(["portrait photo of a woman"])
+                student_gen_diffusion_steps = random.randint(18,22)
+
+                debug = False
+#---------------------------------------------------------------------
+#               text_guidance: a multiplier applied to the difference between positive_text and negative_text
+#               generate: if True, the image samples in your concepts are ignored. Samples are generated instead from the student model during training,
+#                         using "sample_text" as prompts.
+#                         This is the behaviour proposed by the original slider authors and might be necessary for some sliders. It is very slow though,
+#                         and if you have a diverse training dataset that covers the entire range of the slider you are training (e.g. smiling and frowning samples),
+#                         you can set "generate" to False
+#               Guidance Scale on tab training: Set to a value such as 3.5, not the default 1.0 especially if generate is True. If generate is False, 1.0 might work also (not tested)
+#---------------------------------------------------------------------
+                assert len(batch['latent_image']) == 1, "Batch size > 1 not supported"
+
+                with TorchMemoryRecorder(enabled=False):
+                    with torch.no_grad():
+                        generator = torch.Generator(device=self.config.train_device)
+                        generator.manual_seed(self.model.train_progress.global_step)
+                        target_timestep = self.model_setup._get_timestep_discrete(self.model.noise_scheduler.config['num_train_timesteps'], False, generator, 1, self.config, latent_width= batch['latent_image'].shape[-1], latent_height=batch['latent_image'].shape[-2])
+                        if generate:
+                            student_noise_scheduler = copy.deepcopy(self.model.noise_scheduler)
+                            image_seq_len = (batch['latent_image'].shape[-1] // 2) * (batch['latent_image'].shape[-2] // 2)
+                            mu = self.__calculate_shift(image_seq_len, student_noise_scheduler.config.base_image_seq_len, student_noise_scheduler.config.max_image_seq_len, student_noise_scheduler.config.base_shift, student_noise_scheduler.config.max_shift)
+                            student_noise_scheduler.set_timesteps(student_gen_diffusion_steps, device=self.train_device, mu=mu)
+                            student_gen_latent = self.model_setup._create_noise(batch['latent_image'], self.config, generator)
+
+                            for sched_timestep in tqdm(student_noise_scheduler.timesteps, desc="gen", total = student_gen_diffusion_steps):
+                                gen_timestep = (sched_timestep - 1).int().unsqueeze(0)
+                                if gen_timestep.item() < target_timestep.item():
+                                    target_timestep = gen_timestep
+                                    break
+                                student_gen_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress, latent_input=student_gen_latent, timestep=gen_timestep, text=sample_text)
+                                student_gen_latent = student_noise_scheduler.step(student_gen_output_data['predicted'], sched_timestep, student_gen_latent, return_dict=False)[0]
+                        else:
+                            student_gen_latent = None
+
+                        self.model.transformer_lora.remove_hook_from_module()
+                        teacher_output_data_positive = self.model_setup.predict(self.model, batch, self.config, train_progress, latent_input=student_gen_latent, timestep=target_timestep, text=positive_text)
+                        teacher_output_data_neutral = self.model_setup.predict(self.model, batch, self.config, train_progress, latent_input=student_gen_latent, timestep=target_timestep, text=neutral_text)
+                        teacher_output_data_negative = self.model_setup.predict(self.model, batch, self.config, train_progress, latent_input=student_gen_latent, timestep=target_timestep, text=negative_text)
+                        self.model.transformer_lora.hook_to_module()
+
+                    student_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress, latent_input=student_gen_latent, timestep=target_timestep, text=target_text)
+
+                    with torch.no_grad():
+                        student_output_data['target'] = teacher_output_data_neutral['predicted'] + text_guidance * (teacher_output_data_positive['predicted'] - teacher_output_data_negative['predicted'])
+
+                        if debug:
+                            self.save_decoded(student_output_data['latent_input'],f"{train_progress.global_step}-gen.jpg")
+                            self.save_decoded(self.model_setup.image_from_prediction(self.model, self.config, student_output_data['latent_input'], teacher_output_data_positive['predicted'], target_timestep),f"{train_progress.global_step}-positive.jpg")
+                            self.save_decoded(self.model_setup.image_from_prediction(self.model, self.config, student_output_data['latent_input'], teacher_output_data_neutral['predicted'], target_timestep),f"{train_progress.global_step}-neutral.jpg")
+                            self.save_decoded(self.model_setup.image_from_prediction(self.model, self.config, student_output_data['latent_input'], teacher_output_data_negative['predicted'], target_timestep),f"{train_progress.global_step}-negative.jpg")
+                            self.save_decoded(self.model_setup.image_from_prediction(self.model, self.config, student_output_data['latent_input'], student_output_data['target'], target_timestep),f"{train_progress.global_step}-target.jpg")
+                            self.save_decoded(self.model_setup.image_from_prediction(self.model, self.config, student_output_data['latent_input'], student_output_data['predicted'], target_timestep),f"{train_progress.global_step}-predicted.jpg")
+
+                    loss = self.model_setup.calculate_loss(self.model, batch, student_output_data, self.config)
 
                     loss = loss / self.config.gradient_accumulation_steps
                     if scaler:
