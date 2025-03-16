@@ -302,7 +302,7 @@ class FluxModel(BaseModel):
             text_encoder_2_output = text_encoder_2_output * dropout_text_encoder_2_mask[:, None, None]
 
         if text is not None:
-            self.local_text_cache[text] = (text_encoder_2_output, pooled_text_encoder_1_output)
+            self.local_text_cache[text] = (text_encoder_2_output.detach(), pooled_text_encoder_1_output.detach())
         return text_encoder_2_output, pooled_text_encoder_1_output
 
     def prepare_latent_image_ids(self, height, width, device, dtype):
