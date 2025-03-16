@@ -705,7 +705,7 @@ class GenericTrainer(BaseTrainer):
                 student_gen_diffusion_steps = random.randint(18,22)
 
                 debug = False
-                incremental = True
+                incremental = False
 #---------------------------------------------------------------------
 #               text_guidance: a multiplier applied to the difference between positive_text and negative_text
 #               generate: if True, the image samples in your concepts are ignored. Samples are generated instead from the student model during training,
@@ -713,6 +713,7 @@ class GenericTrainer(BaseTrainer):
 #                         This is the behaviour proposed by the original slider authors and might be necessary for some sliders. It is very slow though,
 #                         and if you have a diverse training dataset that covers the entire range of the slider you are training (e.g. smiling and frowning samples),
 #                         you can set "generate" to False
+#               incremental: makes the concept stronger with each training step; sample often, can go off the rails fast.
 #               Guidance Scale on tab training: Set to a value such as 3.5, not the default 1.0 especially if generate is True. If generate is False, 1.0 might work also (not tested)
 #---------------------------------------------------------------------
                 assert len(batch['latent_image']) == 1, "Batch size > 1 not supported"
