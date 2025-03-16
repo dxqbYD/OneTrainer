@@ -705,6 +705,7 @@ class GenericTrainer(BaseTrainer):
                 student_gen_diffusion_steps = random.randint(18,22)
 
                 debug = False
+                incremental = True
 #---------------------------------------------------------------------
 #               text_guidance: a multiplier applied to the difference between positive_text and negative_text
 #               generate: if True, the image samples in your concepts are ignored. Samples are generated instead from the student model during training,
@@ -747,7 +748,10 @@ class GenericTrainer(BaseTrainer):
                     student_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress, latent_input=student_gen_latent, timestep=target_timestep, text=target_text)
 
                     with torch.no_grad():
-                        student_output_data['target'] = teacher_output_data_neutral['predicted'] + text_guidance * (teacher_output_data_positive['predicted'] - teacher_output_data_negative['predicted'])
+                        if incremental:
+                            student_output_data['target'] = student_output_data['predicted'] + text_guidance * (teacher_output_data_positive['predicted'] - teacher_output_data_negative['predicted'])
+                        else:
+                            student_output_data['target'] = teacher_output_data_neutral['predicted'] + text_guidance * (teacher_output_data_positive['predicted'] - teacher_output_data_negative['predicted'])
 
                         if debug:
                             self.save_decoded(student_output_data['latent_input'],f"{train_progress.global_step}-gen.jpg")
