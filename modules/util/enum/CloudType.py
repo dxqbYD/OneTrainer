@@ -1,9 +1,8 @@
 from enum import Enum
 
 
-class AlignPropLoss(Enum):
-    HPS = 'HPS'
-    AESTHETIC = 'AESTHETIC'
-
+class CloudType(Enum):
+    RUNPOD = 'RUNPOD'
+    LINUX = 'LINUX'
     def __str__(self):
         return self.value

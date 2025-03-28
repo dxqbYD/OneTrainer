@@ -1,9 +1,8 @@
+import contextlib
 import copy
 import json
 import os
 import shutil
-import subprocess
-import sys
 import traceback
 from collections.abc import Callable
 from pathlib import Path
@@ -11,7 +10,7 @@ from pathlib import Path
 from modules.dataLoader.BaseDataLoader import BaseDataLoader
 from modules.model.BaseModel import BaseModel
 from modules.modelLoader.BaseModelLoader import BaseModelLoader
-from modules.modelSampler.BaseModelSampler import BaseModelSampler
+from modules.modelSampler.BaseModelSampler import BaseModelSampler, ModelSamplerOutput
 from modules.modelSaver.BaseModelSaver import BaseModelSaver
 from modules.modelSetup.BaseModelSetup import BaseModelSetup
 from modules.trainer.BaseTrainer import BaseTrainer
@@ -21,7 +20,7 @@ from modules.util.commands.TrainCommands import TrainCommands
 from modules.util.config.SampleConfig import SampleConfig
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.dtype_util import create_grad_scaler, enable_grad_scaling
-from modules.util.enum.ImageFormat import ImageFormat
+from modules.util.enum.FileType import FileType
 from modules.util.enum.ModelFormat import ModelFormat
 from modules.util.enum.TimeUnit import TimeUnit
 from modules.util.enum.TrainingMethod import TrainingMethod
@@ -40,7 +39,8 @@ from torchvision.transforms.functional import pil_to_tensor
 from diffusers import FluxPriorReduxPipeline
 from diffusers.utils import load_image
 
-from PIL.Image import Image
+import huggingface_hub
+from requests.exceptions import ConnectionError
 from tqdm import tqdm
 
 
@@ -58,7 +58,6 @@ class GenericTrainer(BaseTrainer):
 
     parameters: list[Parameter]
 
-    tensorboard_subprocess: subprocess.Popen
     tensorboard: SummaryWriter
 
     grad_hook_handles: list[RemovableHandle]
@@ -68,23 +67,9 @@ class GenericTrainer(BaseTrainer):
 
         tensorboard_log_dir = os.path.join(config.workspace_dir, "tensorboard")
         os.makedirs(Path(tensorboard_log_dir).absolute(), exist_ok=True)
-        self.tensorboard = SummaryWriter(os.path.join(tensorboard_log_dir, get_string_timestamp()))
+        self.tensorboard = SummaryWriter(os.path.join(tensorboard_log_dir, f"{config.save_filename_prefix}{get_string_timestamp()}"))
         if config.tensorboard:
-            tensorboard_executable = os.path.join(os.path.dirname(sys.executable), "tensorboard")
-
-            tensorboard_args = [
-                tensorboard_executable,
-                "--logdir",
-                tensorboard_log_dir,
-                "--port",
-                str(config.tensorboard_port),
-                "--samples_per_plugin=images=100,scalars=10000",
-            ]
-
-            if self.config.tensorboard_expose:
-                tensorboard_args.append("--bind_all")
-
-            self.tensorboard_subprocess = subprocess.Popen(tensorboard_args)
+            super()._start_tensorboard()
 
         self.model = None
         self.one_step_trained = False
@@ -123,6 +108,14 @@ class GenericTrainer(BaseTrainer):
                 print(f"Continuing training from backup '{last_backup_path}'...")
             else:
                 print("No backup found, continuing without backup...")
+
+        if self.config.secrets.huggingface_token != "":
+            self.callbacks.on_update_status("logging into Hugging Face")
+            with contextlib.suppress(ConnectionError):
+                huggingface_hub.login(
+                    token = self.config.secrets.huggingface_token,
+                    new_session = False,
+                )
 
         self.callbacks.on_update_status("loading the model")
         self.model = self.model_loader.load(
@@ -168,7 +161,7 @@ class GenericTrainer(BaseTrainer):
         os.makedirs(Path(path).absolute(), exist_ok=True)
         path = path_util.canonical_join(path, f"{get_string_timestamp()}.json")
         with open(path, "w") as f:
-            json.dump(self.config.to_pack_dict(), f, indent=4)
+            json.dump(self.config.to_pack_dict(secrets=False), f, indent=4)
 
     def __clear_cache(self):
         print(
@@ -213,7 +206,6 @@ class GenericTrainer(BaseTrainer):
             train_device: torch.device,
             sample_config_list: list[SampleConfig],
             folder_postfix: str = "",
-            image_format: ImageFormat = ImageFormat.JPG,
             is_custom_sample: bool = False,
     ):
         for i, sample_config in enumerate(sample_config_list):
@@ -236,19 +228,19 @@ class GenericTrainer(BaseTrainer):
 
                     sample_path = os.path.join(
                         sample_dir,
-                        f"{get_string_timestamp()}-training-sample-{train_progress.filename_string()}{image_format.extension()}"
+                        f"{get_string_timestamp()}-training-sample-{train_progress.filename_string()}"
                     )
 
-                    def on_sample_default(image: Image):
-                        if self.config.samples_to_tensorboard:
+                    def on_sample_default(sampler_output: ModelSamplerOutput):
+                        if self.config.samples_to_tensorboard and sampler_output.file_type == FileType.IMAGE:
                             self.tensorboard.add_image(
-                                f"sample{str(i)} - {safe_prompt}", pil_to_tensor(image),  # noqa: B023
+                                f"sample{str(i)} - {safe_prompt}", pil_to_tensor(sampler_output.data),  # noqa: B023
                                 train_progress.global_step
                             )
-                        self.callbacks.on_sample_default(image)
+                        self.callbacks.on_sample_default(sampler_output)
 
-                    def on_sample_custom(image: Image):
-                        self.callbacks.on_sample_custom(image)
+                    def on_sample_custom(sampler_output: ModelSamplerOutput):
+                        self.callbacks.on_sample_custom(sampler_output)
 
                     on_sample = on_sample_custom if is_custom_sample else on_sample_default
                     on_update_progress = self.callbacks.on_update_sample_custom_progress if is_custom_sample else self.callbacks.on_update_sample_default_progress
@@ -263,6 +255,8 @@ class GenericTrainer(BaseTrainer):
                         sample_config=sample_config,
                         destination=sample_path,
                         image_format=self.config.sample_image_format,
+                        video_format=self.config.sample_video_format,
+                        audio_format=self.config.sample_audio_format,
                         on_sample=on_sample,
                         on_update_progress=on_update_progress,
                         #redux=self.redux_sample
@@ -307,7 +301,6 @@ class GenericTrainer(BaseTrainer):
             train_progress=train_progress,
             train_device=train_device,
             sample_config_list=sample_params_list,
-            image_format=self.config.sample_image_format,
             is_custom_sample=is_custom_sample,
         )
 
@@ -320,7 +313,6 @@ class GenericTrainer(BaseTrainer):
                 train_progress=train_progress,
                 train_device=train_device,
                 sample_config_list=sample_params_list,
-                image_format=self.config.sample_image_format,
                 folder_postfix=" - no-ema",
             )
 
@@ -361,7 +353,7 @@ class GenericTrainer(BaseTrainer):
 
                 with torch.no_grad():
                     model_output_data = self.model_setup.predict(
-                        self.model, validation_batch, self.config, train_progress)
+                        self.model, validation_batch, self.config, train_progress, deterministic=True)
                     loss_validation = self.model_setup.calculate_loss(
                         self.model, validation_batch, model_output_data, self.config)
 
@@ -413,7 +405,7 @@ class GenericTrainer(BaseTrainer):
         os.makedirs(Path(config_path).absolute(), exist_ok=True)
 
         with open(args_path, "w") as f:
-            json.dump(self.config.to_dict(), f, indent=4)
+            json.dump(self.config.to_settings_dict(secrets=False), f, indent=4)
         if os.path.isfile(self.config.concept_file_name):
             shutil.copy2(self.config.concept_file_name, concepts_path)
         if os.path.isfile(self.config.sample_definition_file_name):
@@ -513,7 +505,9 @@ class GenericTrainer(BaseTrainer):
         torch_gc()
 
     def __needs_sample(self, train_progress: TrainProgress):
-        return self.repeating_action_needed(
+        return self.single_action_elapsed(
+            "sample_skip_first", self.config.sample_skip_first, self.config.sample_after_unit, train_progress
+        ) and self.repeating_action_needed(
             "sample", self.config.sample_after, self.config.sample_after_unit, train_progress
         )
 
@@ -601,6 +595,7 @@ class GenericTrainer(BaseTrainer):
         lr_scheduler = None
         accumulated_loss = 0.0
         ema_loss = None
+        ema_loss_steps = 0
         for _epoch in tqdm(range(train_progress.epoch, self.config.epochs, 1), desc="epoch"):
             self.callbacks.on_update_status("starting epoch/caching")
 
@@ -627,6 +622,7 @@ class GenericTrainer(BaseTrainer):
                     learning_rate_scheduler=self.config.learning_rate_scheduler,
                     warmup_steps=self.config.learning_rate_warmup_steps,
                     num_cycles=self.config.learning_rate_cycles,
+                    min_factor=self.config.learning_rate_min_factor,
                     num_epochs=self.config.epochs,
                     approximate_epoch_length=self.data_loader.get_data_set().approximate_length(),
                     batch_size=self.config.batch_size,
@@ -735,7 +731,9 @@ class GenericTrainer(BaseTrainer):
 
                         self.tensorboard.add_scalar("loss/train_step", accumulated_loss, train_progress.global_step)
                         ema_loss = ema_loss or accumulated_loss
-                        ema_loss = (ema_loss * 0.99) + (accumulated_loss * 0.01)
+                        ema_loss_steps += 1
+                        ema_loss_decay = min(0.99, 1 - (1 / ema_loss_steps))
+                        ema_loss = (ema_loss * ema_loss_decay) + (accumulated_loss * (1 - ema_loss_decay))
                         step_tqdm.set_postfix({
                             'loss': accumulated_loss,
                             'smooth loss': ema_loss,
@@ -788,14 +786,20 @@ class GenericTrainer(BaseTrainer):
 
             if self.model.ema:
                 self.model.ema.copy_ema_to(self.parameters, store_temp=False)
-
-            print("Saving " + self.config.output_model_destination)
+            if os.path.isdir(self.config.output_model_destination) and self.config.output_model_format.is_single_file():
+                save_path = os.path.join(
+                    self.config.output_model_destination,
+                    f"{self.config.save_filename_prefix}{get_string_timestamp()}{self.config.output_model_format.file_extension()}"
+                )
+            else:
+                save_path = self.config.output_model_destination
+            print("Saving " + save_path)
 
             self.model_saver.save(
                 model=self.model,
                 model_type=self.config.model_type,
                 output_model_format=self.config.output_model_format,
-                output_model_destination=self.config.output_model_destination,
+                output_model_destination=save_path,
                 dtype=self.config.output_dtype.torch_dtype()
             )
         elif self.model is not None:
@@ -804,7 +808,7 @@ class GenericTrainer(BaseTrainer):
         self.tensorboard.close()
 
         if self.config.tensorboard:
-            self.tensorboard_subprocess.kill()
+            super()._stop_tensorboard()
 
         for handle in self.grad_hook_handles:
             handle.remove()

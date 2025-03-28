@@ -2,7 +2,10 @@ import copy
 import os
 
 from modules.model.BaseModel import BaseModel
-from modules.modelSampler.BaseModelSampler import BaseModelSampler
+from modules.modelSampler.BaseModelSampler import (
+    BaseModelSampler,
+    ModelSamplerOutput,
+)
 from modules.ui.SampleFrame import SampleFrame
 from modules.util import create
 from modules.util.callbacks.TrainCallbacks import TrainCallbacks
@@ -10,9 +13,11 @@ from modules.util.commands.TrainCommands import TrainCommands
 from modules.util.config.SampleConfig import SampleConfig
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.enum.EMAMode import EMAMode
+from modules.util.enum.FileType import FileType
 from modules.util.enum.TrainingMethod import TrainingMethod
 from modules.util.time_util import get_string_timestamp
 from modules.util.ui import components
+from modules.util.ui.ui_utils import set_window_icon
 from modules.util.ui.UIState import UIState
 
 import torch
@@ -59,6 +64,7 @@ class SampleWindow(ctk.CTkToplevel):
         self.title("Sample")
         self.geometry("1200x800")
         self.resizable(True, True)
+        set_window_icon(self)
         self.wait_visibility()
         self.focus_set()
 
@@ -86,6 +92,7 @@ class SampleWindow(ctk.CTkToplevel):
 
         self.progress = components.progress(self, 2, 0)
         components.button(self, 3, 0, "sample", self.__sample)
+        self.after(150, lambda: set_window_icon(self))
 
     def __load_model(self) -> BaseModel:
         model_loader = create.create_model_loader(
@@ -139,11 +146,13 @@ class SampleWindow(ctk.CTkToplevel):
             training_method=self.initial_train_config.training_method,
         )
 
-    def __update_preview(self, image: Image):
-        self.image.configure(
-            light_image=image,
-            size=(image.width, image.height),
-        )
+    def __update_preview(self, sampler_output: ModelSamplerOutput):
+        if sampler_output.file_type == FileType.IMAGE:
+            image = sampler_output.data
+            self.image.configure(
+                light_image=image,
+                size=(image.width, image.height),
+            )
 
     def __update_progress(self, progress: int, max_progress: int):
         self.progress.set(progress / max_progress)
@@ -172,10 +181,9 @@ class SampleWindow(ctk.CTkToplevel):
             )
 
             progress = self.model.train_progress
-            image_format = self.current_train_config.sample_image_format
             sample_path = os.path.join(
                 sample_dir,
-                f"{get_string_timestamp()}-training-sample-{progress.filename_string()}{image_format.extension()}"
+                f"{get_string_timestamp()}-training-sample-{progress.filename_string()}"
             )
 
             self.model.eval()
@@ -184,6 +192,8 @@ class SampleWindow(ctk.CTkToplevel):
                 sample_config=sample,
                 destination=sample_path,
                 image_format=self.current_train_config.sample_image_format,
+                video_format=self.current_train_config.sample_video_format,
+                audio_format=self.current_train_config.sample_audio_format,
                 on_sample=self.__update_preview,
                 on_update_progress=self.__update_progress,
             )
