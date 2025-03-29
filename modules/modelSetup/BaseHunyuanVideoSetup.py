@@ -40,29 +40,6 @@ class BaseHunyuanVideoSetup(
             model: HunyuanVideoModel,
             config: TrainConfig,
     ):
-        # if config.attention_mechanism == AttentionMechanism.DEFAULT:
-        #     model.transformer.set_attn_processor(HunyuanVideoAttnProcessor2_0())
-        # elif config.attention_mechanism == AttentionMechanism.XFORMERS and is_xformers_available():
-        #     try:
-        #         model.transformer.set_attn_processor(HunyuanVideoXFormersAttnProcessor(model.train_dtype.torch_dtype()))
-        #         model.vae.enable_xformers_memory_efficient_attention()
-        #     except Exception as e:
-        #         print(
-        #             "Could not enable memory efficient attention. Make sure xformers is installed"
-        #             f" correctly and a GPU is available: {e}"
-        #         )
-        # elif config.attention_mechanism == AttentionMechanism.SDP:
-        #     model.transformer.set_attn_processor(HunyuanVideoAttnProcessor2_0())
-        #
-        #     if is_xformers_available():
-        #         try:
-        #             model.vae.enable_xformers_memory_efficient_attention()
-        #         except Exception as e:
-        #             print(
-        #                 "Could not enable memory efficient attention. Make sure xformers is installed"
-        #                 f" correctly and a GPU is available: {e}"
-        #             )
-
         if config.gradient_checkpointing.enabled():
             model.transformer_offload_conductor = \
                 enable_checkpointing_for_hunyuan_video_transformer(model.transformer, config)
@@ -118,6 +95,7 @@ class BaseHunyuanVideoSetup(
             if embedding_state is None:
                 with model.autocast_context:
                     embedding_state_1 = self._create_new_embedding(
+                        model,
                         embedding_config,
                         model.tokenizer_1,
                         model.text_encoder_1,
@@ -128,6 +106,7 @@ class BaseHunyuanVideoSetup(
                     )
 
                     embedding_state_2 = self._create_new_embedding(
+                        model,
                         embedding_config,
                         model.tokenizer_2,
                         model.text_encoder_2,
