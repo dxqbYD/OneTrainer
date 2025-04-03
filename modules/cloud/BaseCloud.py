@@ -19,6 +19,8 @@ class BaseCloud(metaclass=ABCMeta):
     def setup(self):
         self._connect()
 
+        self._precache_model()
+
         if self.config.cloud.install_onetrainer or self.config.cloud.update_onetrainer:
             self._install_onetrainer(update=self.config.cloud.update_onetrainer)
 
@@ -110,6 +112,10 @@ class BaseCloud(metaclass=ABCMeta):
 
     def stop(self):
         raise NotImplementedError("stopping this cloud type not supported")
+
+    @abstractmethod
+    def _precache_model(self):
+        pass
 
     @abstractmethod
     def _install_onetrainer(self, update: bool=False):

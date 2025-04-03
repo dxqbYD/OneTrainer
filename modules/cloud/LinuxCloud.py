@@ -73,6 +73,19 @@ class LinuxCloud(BaseCloud):
         super().setup()
         self.connection.run(f'mkfifo {shlex.quote(self.command_pipe)}',warn=True,hide=True,in_stream=False)
 
+    def _precache_model(self):
+        cmd = f"pip install huggingface_hub"
+        if self.config.secrets.huggingface_token != "":
+            cmd += f" && export HF_TOKEN={self.config.secrets.huggingface_token}"
+        if self.config.cloud.huggingface_cache_dir != "":
+            cmd += f" && export HF_HOME={self.config.cloud.huggingface_cache_dir}"
+
+        cmd += f" && huggingface-cli download {self.config.base_model_name} model_index.json --local-dir ."
+        cmd += " && time huggingface-cli download " + self.config.base_model_name + " --include `grep -oE '\"[^\"]*\":' model_index.json | grep -v '^_' | while read -r module; do module=${module%\\\":}; module=${module#\\\"}; echo \"$module/*\"; done`"
+
+        self.connection.run(cmd, warn=True)
+
+
     def _install_onetrainer(self, update: bool=False):
         config=self.config.cloud
         parent=Path(config.onetrainer_dir).parent.as_posix()
