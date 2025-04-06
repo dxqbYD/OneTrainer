@@ -10,6 +10,7 @@ from modules.util.optimizer_util import (
     update_optimizer_config,
 )
 from modules.util.ui import components
+from modules.util.ui.ui_utils import set_window_icon
 
 import customtkinter as ctk
 
@@ -22,10 +23,9 @@ class OptimizerParamsWindow(ctk.CTkToplevel):
             ui_state,
             *args, **kwargs,
     ):
-        ctk.CTkToplevel.__init__(self, parent, *args, **kwargs)
+        super().__init__(parent, *args, **kwargs)
 
         self.parent = parent
-
         self.train_config = train_config
         self.ui_state = ui_state
         self.optimizer_ui_state = ui_state.get_var("optimizer")
@@ -34,9 +34,6 @@ class OptimizerParamsWindow(ctk.CTkToplevel):
         self.title("Optimizer Settings")
         self.geometry("800x500")
         self.resizable(True, True)
-        self.wait_visibility()
-        self.grab_set()
-        self.focus_set()
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=0)
@@ -53,6 +50,12 @@ class OptimizerParamsWindow(ctk.CTkToplevel):
 
         components.button(self, 1, 0, "ok", command=self.on_window_close)
         self.main_frame(self.frame)
+
+        self.wait_visibility()
+        self.grab_set()
+        self.focus_set()
+        self.after(200, lambda: set_window_icon(self))
+
 
     def main_frame(self, master):
         # Optimizer
@@ -111,6 +114,7 @@ class OptimizerParamsWindow(ctk.CTkToplevel):
             'fused_back_pass': {'title': 'Fused Back Pass', 'tooltip': 'Whether to fuse the back propagation pass with the optimizer step. This reduces VRAM usage, but is not compatible with gradient accumulation.', 'type': 'bool'},
             'growth_rate': {'title': 'Growth Rate', 'tooltip': 'Limit for D estimate growth rate.', 'type': 'float'},
             'initial_accumulator_value': {'title': 'Initial Accumulator Value', 'tooltip': 'Initial value for Adagrad optimizer.', 'type': 'float'},
+            'initial_accumulator': {'title': 'Initial Accumulator', 'tooltip': 'Sets the starting value for both moment estimates to ensure numerical stability and balanced adaptive updates early in training.', 'type': 'float'},
             'is_paged': {'title': 'Is Paged', 'tooltip': 'Whether the optimizer\'s internal state should be paged to CPU.', 'type': 'bool'},
             'log_every': {'title': 'Log Every', 'tooltip': 'Intervals at which logging should occur.', 'type': 'int'},
             'lr_decay': {'title': 'LR Decay', 'tooltip': 'Rate at which learning rate decreases.', 'type': 'float'},
@@ -121,7 +125,7 @@ class OptimizerParamsWindow(ctk.CTkToplevel):
             'nesterov': {'title': 'Nesterov', 'tooltip': 'Whether to enable Nesterov optimizer_momentum.', 'type': 'bool'},
             'no_prox': {'title': 'No Prox', 'tooltip': 'Whether to use proximity updates or not.', 'type': 'bool'},
             'optim_bits': {'title': 'Optim Bits', 'tooltip': 'Number of bits used for optimization.', 'type': 'int'},
-            'percentile_clipping': {'title': 'Percentile Clipping', 'tooltip': 'Gradient clipping based on percentile values.', 'type': 'float'},
+            'percentile_clipping': {'title': 'Percentile Clipping', 'tooltip': 'Gradient clipping based on percentile values.', 'type': 'int'},
             'relative_step': {'title': 'Relative Step', 'tooltip': 'Whether to use a relative step size.', 'type': 'bool'},
             'safeguard_warmup': {'title': 'Safeguard Warmup', 'tooltip': 'Avoid issues during warm-up stage.', 'type': 'bool'},
             'scale_parameter': {'title': 'Scale Parameter', 'tooltip': 'Whether to scale the parameter or not.', 'type': 'bool'},

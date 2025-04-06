@@ -21,6 +21,8 @@ from safetensors.torch import load_file
 
 
 class HFModelLoaderMixin(metaclass=ABCMeta):
+    def __init__(self):
+        super().__init__()
 
     def __load_sub_module(
             self,
@@ -285,4 +287,18 @@ class HFModelLoaderMixin(metaclass=ABCMeta):
             dtype,
             train_dtype,
             None,
+        )
+
+    def _prepare_sub_modules(self, pretrained_model_name_or_path: str, diffusers_modules: list, transformers_modules: list):
+        is_local = os.path.isdir(pretrained_model_name_or_path)
+        if is_local:
+            return
+
+        diffusers_paths = [folder + "/diffusion_pytorch_model*" for folder in diffusers_modules]
+        transformers_paths = [folder + "/model*" for folder in transformers_modules]
+        transformers_paths.extend([folder + "/pytorch_model*" for folder in transformers_modules])
+
+        huggingface_hub.snapshot_download(
+            pretrained_model_name_or_path,
+            allow_patterns=diffusers_paths + transformers_paths,
         )
