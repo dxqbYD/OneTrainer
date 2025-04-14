@@ -198,10 +198,10 @@ class BaseFluxSetup(
             train_progress: TrainProgress,
             *,
             deterministic: bool = False,
+            deterministic_batch: bool = False,
     ) -> dict:
         with model.autocast_context:
-            batch_seed = 0 if deterministic else int(train_progress.global_step / 2)
-            print("batch seed: ", batch_seed)
+            batch_seed = 0 if deterministic else train_progress.global_step
             generator = torch.Generator(device=config.train_device)
             generator.manual_seed(batch_seed)
             rand = Random(batch_seed)
@@ -234,18 +234,23 @@ class BaseFluxSetup(
             if config.model_type.has_conditioning_image_input():
                 scaled_latent_conditioning_image = \
                     (batch['latent_conditioning_image'] - vae_shift_factor) * vae_scaling_factor
-
-            latent_noise = self._create_noise(scaled_latent_image, config, generator)
+            if deterministic_batch:
+                latent_noise = self._create_noise(scaled_latent_image[0].unsqueeze(0), config, generator).repeat(scaled_latent_image.shape[0],1,1,1)
+            else:
+                latent_noise = self._create_noise(scaled_latent_image, config, generator)
 
             timestep = self._get_timestep_discrete(
                 model.noise_scheduler.config['num_train_timesteps'],
                 deterministic,
                 generator,
-                scaled_latent_image.shape[0],
+                1 if deterministic_batch else scaled_latent_image.shape[0],
                 config,
                 latent_height=scaled_latent_image.shape[-2],
                 latent_width=scaled_latent_image.shape[-1],
             )
+            if deterministic_batch:
+                timestep = timestep.repeat(scaled_latent_image.shape[0])
+
 
             scaled_noisy_latent_image, sigma = self._add_noise_discrete(
                 scaled_latent_image,
@@ -381,11 +386,16 @@ class BaseFluxSetup(
             batch: dict,
             data: dict,
             config: TrainConfig,
+            reduce = True,
     ) -> Tensor:
-        return self._flow_matching_losses(
+        losses = self._flow_matching_losses(
             batch=batch,
             data=data,
             config=config,
             train_device=self.train_device,
             sigmas=model.noise_scheduler.sigmas.to(device=self.train_device),
-        ).mean()
+        )
+        if reduce:
+            return losses.mean()
+        else:
+            return losses
