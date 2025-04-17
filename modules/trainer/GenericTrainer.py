@@ -713,7 +713,7 @@ class GenericTrainer(BaseTrainer):
                     ref_factor = 1
                     balance_k = 0.002
                     balance_lambda = 0.1
-
+                    dpo_beta = 25
                     #-----------------------------------------------------------
 
 
@@ -738,7 +738,10 @@ class GenericTrainer(BaseTrainer):
                     balance_term = torch.square(torch.log(torch.abs(diff_a) + balance_k) - torch.log(torch.abs(diff_b) + balance_k))
 
                     #loss = model_loss_p + balance_lambda * balance_term
-                    loss = model_loss_p + ref_factor * reg_term
+                    #works best so far:
+                    #loss = model_loss_p + ref_factor * reg_term
+                    
+                    loss = -torch.nn.functional.logsigmoid(-beta_dpo * diff_p) + ref_factor * reg_term
 
                     #TODO try with reg_factor 0
                     #TODO try with logsigmoid on model_loss_p
