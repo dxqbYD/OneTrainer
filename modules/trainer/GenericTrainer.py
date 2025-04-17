@@ -626,14 +626,14 @@ class GenericTrainer(BaseTrainer):
                     global_step=train_progress.global_step
                 )
 
-            def merge_batch(batch1,batch2):
-                assert batch1.keys() == batch2.keys()
+            def merge_batch(batch1,batch2, batch3):
+                assert batch1.keys() == batch2.keys() and batch2.keys() == batch3.keys()
                 newbatch = {}
                 for key in batch1:
                     if isinstance(batch1[key], list):
-                        newbatch[key] = [*batch1[key], *batch2[key]]
+                        newbatch[key] = [*batch1[key], *batch2[key], *batch3[key]]
                     elif isinstance(batch1[key], torch.Tensor):
-                        newbatch[key] = torch.cat((batch1[key], batch2[key]), dim = 0)
+                        newbatch[key] = torch.cat((batch1[key], batch2[key], batch3[key]), dim = 0)
                     #else:
                     #    assert False
                 return newbatch
@@ -644,13 +644,18 @@ class GenericTrainer(BaseTrainer):
             for batch in orig_list:
                 assert len(batch['image_path']) == 1
                 if "positive" in batch['image_path'][0]:
-                    negative_path = batch['image_path'][0].replace("positive","negative")
-                    negatives = [item for item in orig_list
-                        if item['image_path'][0] == negative_path
+                    refa_path = batch['image_path'][0].replace("positive","refa")
+                    refa = [item for item in orig_list
+                        if item['image_path'][0] == refa_path
                         and batch['latent_image'][0].shape == item['latent_image'][0].shape
                     ]
-                    if len(negatives) == 1:
-                        batch_list.append(merge_batch(batch, negatives[0]))
+                    refb_path = batch['image_path'][0].replace("positive","refb")
+                    refb = [item for item in orig_list
+                        if item['image_path'][0] == refb_path
+                        and batch['latent_image'][0].shape == item['latent_image'][0].shape
+                    ]
+                    if len(refa) == 1 and len(refb) == 1:
+                        batch_list.append(merge_batch(batch, refa[0], refb[0]))
                     else:
                         print("dropping ", batch['image_path'][0])
 
@@ -701,24 +706,14 @@ class GenericTrainer(BaseTrainer):
                 self.callbacks.on_update_status("training")
 
                 with TorchMemoryRecorder(enabled=False):
-                    print(batch['image_path'][0], " vs. ", batch['image_path'][1])
-                    assert len(batch['image_path']) == 2
-                    #breakpoint()
+                    assert len(batch['image_path']) == 3
+                    print(batch['image_path'][0], " vs. ", batch['image_path'][1], " vs. ", batch['image_path'][2])
 
                     #-----------------------------------------------------------
-                    beta_dpo = 25
-                    w_factor = 1.0
-                    l_factor = 1.0
-                    l_gate = False
-                    l_abs = False
-                    my_balanced = True
+                    ref_factor = 0
                     balance_k = 0.002
                     balance_lambda = 0.1
 
-                    paper_balanced=False
-                    gate_balanced = False
-                    ema_balanced = False
-                    clip_balance = False
                     #-----------------------------------------------------------
 
 
@@ -726,116 +721,36 @@ class GenericTrainer(BaseTrainer):
                     with torch.no_grad():
                         ref_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress, deterministic_batch=True)
                         ref_loss = self.model_setup.calculate_loss(self.model, batch, ref_output_data, self.config, reduce=False)
-                        ref_loss_w, ref_loss_l = ref_loss.chunk(2)
-
-                        ref_diff = w_factor * ref_loss_w - l_factor * ref_loss_l
+                        ref_loss_p, ref_loss_a, ref_loss_b = ref_loss.chunk(3)
 
                     self.model.transformer_lora.hook_to_module()
 
                     model_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress, deterministic_batch=True)
                     model_loss = self.model_setup.calculate_loss(self.model, batch, model_output_data, self.config, reduce=False)
-                    model_loss_w, model_loss_l = model_loss.chunk(2)
-                    diff_w = model_loss_w - ref_loss_w
-                    diff_l = model_loss_l - ref_loss_l
-                    gated_diff_l = torch.min(model_loss_l - ref_loss_l,0)
-                    abs_diff_l = - torch.abs(model_loss_l - ref_loss_l)
-
-                    model_diff = w_factor * model_loss_w - l_factor * model_loss_l
+                    model_loss_p, model_loss_a, model_loss_b = model_loss.chunk(3)
+                    diff_a = model_loss_a - ref_loss_a
+                    diff_b = model_loss_b - ref_loss_b
+                    diff_p = model_loss_p - ref_loss_p
 
 
-                    diff_w_ema = ema_beta * diff_w_ema + (1 - ema_beta) * diff_w.item()
-                    diff_l_ema = ema_beta * diff_l_ema + (1 - ema_beta) * diff_l.item()
-                    self.tensorboard.add_scalar("loss/diff_w_ema", diff_w_ema, train_progress.global_step)
-                    self.tensorboard.add_scalar("loss/diff_l_ema", diff_l_ema, train_progress.global_step)
+                    #reg_term = torch.square(diff_a - diff_b)
+                    reg_term = torch.abs(diff_a - diff_b)
+                    balance_term = torch.square(torch.log(torch.abs(diff_a) + balance_k) - torch.log(torch.abs(diff_b) + balance_k))
 
-                    if l_gate:
-                        choose_diff_l = gated_diff_l
-                    elif l_abs:
-                        choose_diff_l = abs_diff_l
-                    else:
-                        choose_diff_l = diff_l
+                    #loss = model_loss_p + balance_lambda * balance_term
+                    loss = model_loss_p + ref_factor * reg_term
 
+                    #TODO try with reg_factor 0
+                    #TODO try with logsigmoid on model_loss_p
+                    #TODO try with logsigmoid on reg_term
+                    #TODO retry square() without log, diff_p was wrong
 
-                    if my_balanced:
-                        #my balancing:
-                        if diff_w < 0 and diff_l > 0:
-                            balance_term = torch.square(torch.log(torch.abs(diff_w) + balance_k) - torch.log(torch.abs(diff_l) + balance_k))
-                            #balance_term = torch.square(torch.log(torch.min(diff_w,0) + balance_k) - torch.log(torch.max(diff_l,0) + balance_k))
-                        else:
-                            balance_term = 0
-                        loss = -torch.nn.functional.logsigmoid(beta_dpo * w_factor * -diff_w) - torch.nn.functional.logsigmoid(beta_dpo * l_factor * diff_l) + balance_term * balance_lambda
-                        #diff_term = w_factor * diff_w - l_factor * choose_diff_l
-                        #inside_term = - beta_dpo * diff_term
-                        ##inside_term = - beta_dpo * (model_diff - ref_diff)
-                        #loss = - torch.nn.functional.logsigmoid(inside_term)  + balance_term * balance_lambda
-                        self.tensorboard.add_scalar("loss/balance_term", balance_term, train_progress.global_step)
-
-                        #diff_term = w_factor * diff_w - l_factor * choose_diff_l
-                        #inside_term = - beta_dpo * diff_term
-                        #balance_term = diff_w * diff_l
-                        #sign_lambda = 100
-                        #sign_term = max(0,diff_w*diff_l)
-                        #loss = - torch.nn.functional.logsigmoid(inside_term - balance_lambda * balance_term)# + sign_lambda * sign_term
-                        #self.tensorboard.add_scalar("loss/diff_term", diff_term, train_progress.global_step)
-                        #self.tensorboard.add_scalar("loss/inside_term", inside_term, train_progress.global_step)
-                        #self.tensorboard.add_scalar("loss/sign_term", sign_term, train_progress.global_step)
-                    elif gate_balanced:
-                        loss = torch.max(-torch.nn.functional.logsigmoid(beta_dpo * w_factor * -diff_w), -torch.nn.functional.logsigmoid(beta_dpo * l_factor * diff_l))
-                        #diff_term = w_factor * diff_w - l_factor * choose_diff_l
-                        #inside_term = - beta_dpo * diff_term
-                        ##inside_term = - beta_dpo * (model_diff - ref_diff)
-                        #loss = - torch.nn.functional.logsigmoid(inside_term)
-                    elif paper_balanced:
-                        #balancing according to https://arxiv.org/pdf/2502.20847:
-
-                        balance_lambda = torch.log(model_loss_l) / (torch.log(model_loss_w) + torch.log(model_loss_l)) #TODO correct? the log()s have been removed from the original DPO paper's notation. Use this...
-                        #balance_lambda = model_loss_l / (model_loss_w + model_loss_l) #TODO ...or this?
-                        self.tensorboard.add_scalar("loss/balance_lambda", balance_lambda, train_progress.global_step)
-                        diff_term = balance_lambda * diff_w - (1 - balance_lambda) * choose_diff_l
-                        inside_term = - beta_dpo * diff_term
-                        #inside_term = - beta_dpo * (model_diff - ref_diff)
-                        loss = - torch.nn.functional.logsigmoid(inside_term)
-                    elif ema_balanced:
-                        if diff_l_ema > 0 and diff_w_ema < 0:
-                            #balance_lambda = diff_l_ema / (diff_l_ema - diff_w_ema)
-                            balance_lambda = diff_l_ema**2 / (diff_l_ema**2 + diff_w_ema**2)
-                        elif diff_l_ema < 0 and diff_w_ema > 0:
-                            balance_lambda = 0.5
-                        elif diff_l_ema < 0 and diff_w_ema < 0:
-                            balance_lambda = 0
-                        elif diff_w_ema > 0 and diff_l_ema > 0:
-                            balance_lambda = 1.0
-                        #else:
-                        #    assert False
-                        #diff_term = balance_lambda * diff_w - (1 - balance_lambda) * choose_diff_l
-                        #inside_term = - beta_dpo * diff_term
-                        ##inside_term = - beta_dpo * (model_diff - ref_diff)
-                        #loss = - torch.nn.functional.logsigmoid(inside_term)
-                        loss = - balance_lambda * torch.nn.functional.logsigmoid(beta_dpo * w_factor * -diff_w) - (1-balance_lambda) * torch.nn.functional.logsigmoid(beta_dpo * l_factor * diff_l)
-
-                        self.tensorboard.add_scalar("loss/balance_lambda", balance_lambda, train_progress.global_step)
-                    elif clip_balance:
-                        if -diff_w_ema < diff_l_ema:
-                            loss = -torch.nn.functional.logsigmoid(beta_dpo * w_factor * -diff_w)
-                        else:
-                            loss = -torch.nn.functional.logsigmoid(beta_dpo * l_factor * diff_l)
-                    else:
-                        diff_term = w_factor * diff_w - l_factor * choose_diff_l
-                        inside_term = - beta_dpo * diff_term
-                        #inside_term = - beta_dpo * (model_diff - ref_diff)
-                        loss = - torch.nn.functional.logsigmoid(inside_term)
-
-                    self.tensorboard.add_scalar("loss/ref_loss_w", ref_loss_w, train_progress.global_step)
-                    self.tensorboard.add_scalar("loss/ref_loss_l", ref_loss_l, train_progress.global_step)
-                    self.tensorboard.add_scalar("loss/ref_diff", ref_diff, train_progress.global_step)
-                    self.tensorboard.add_scalar("loss/model_loss_w", model_loss_w, train_progress.global_step)
-                    self.tensorboard.add_scalar("loss/model_loss_l", model_loss_l, train_progress.global_step)
-                    self.tensorboard.add_scalar("loss/model_diff", model_diff, train_progress.global_step)
-                    self.tensorboard.add_scalar("loss/diff_w", diff_w, train_progress.global_step)
-                    self.tensorboard.add_scalar("loss/diff_l", diff_l, train_progress.global_step)
-
-                    self.tensorboard.add_scalar("loss/w_anteil", -torch.nn.functional.logsigmoid(beta_dpo * -diff_w), train_progress.global_step)
-                    self.tensorboard.add_scalar("loss/l_anteil", - torch.nn.functional.logsigmoid(beta_dpo * diff_l), train_progress.global_step)
+                    self.tensorboard.add_scalar("loss/model_loss_p", model_loss_p, train_progress.global_step)
+                    self.tensorboard.add_scalar("loss/diff_a", diff_a, train_progress.global_step)
+                    self.tensorboard.add_scalar("loss/diff_b", diff_b, train_progress.global_step)
+                    self.tensorboard.add_scalar("loss/diff_p", diff_p, train_progress.global_step)
+                    self.tensorboard.add_scalar("loss/reg_term", reg_term, train_progress.global_step)
+                    self.tensorboard.add_scalar("loss/balance_term", balance_term, train_progress.global_step)
 
 
                     #loss = loss_w
