@@ -741,7 +741,7 @@ class GenericTrainer(BaseTrainer):
                     #works best so far:
                     #loss = model_loss_p + ref_factor * reg_term
                     
-                    loss = -torch.nn.functional.logsigmoid(-beta_dpo * diff_p) + ref_factor * reg_term
+                    loss = -torch.nn.functional.logsigmoid(-beta_dpo * (diff_p + ref_factor * reg_term))
 
                     #TODO try with reg_factor 0
                     #TODO try with logsigmoid on model_loss_p
