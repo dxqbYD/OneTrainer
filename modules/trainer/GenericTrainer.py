@@ -713,7 +713,7 @@ class GenericTrainer(BaseTrainer):
                     ref_factor = 1
                     balance_k = 0.002
                     balance_lambda = 0.1
-                    dpo_beta = 25
+                    beta_dpo = 25
                     #-----------------------------------------------------------
 
 
