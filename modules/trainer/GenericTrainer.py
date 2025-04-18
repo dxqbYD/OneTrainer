@@ -710,7 +710,7 @@ class GenericTrainer(BaseTrainer):
                     print(batch['image_path'][0], " vs. ", batch['image_path'][1], " vs. ", batch['image_path'][2])
 
                     #-----------------------------------------------------------
-                    ref_factor = 1
+                    ref_factor = 0.2
                     balance_k = 0.002
                     balance_lambda = 0.1
                     beta_dpo = 25
