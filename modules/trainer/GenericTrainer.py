@@ -710,7 +710,7 @@ class GenericTrainer(BaseTrainer):
                     print(batch['image_path'][0], " vs. ", batch['image_path'][1], " vs. ", batch['image_path'][2])
 
                     #-----------------------------------------------------------
-                    ref_factor = 1
+                    ref_factor = 0.3
                     balance_k = 0.002
                     balance_lambda = 0.1
                     beta_dpo = 25
@@ -739,9 +739,9 @@ class GenericTrainer(BaseTrainer):
 
                     #loss = model_loss_p + balance_lambda * balance_term
                     #works best so far:
-                    #loss = model_loss_p + ref_factor * reg_term
+                    loss = model_loss_p + ref_factor * reg_term
                     
-                    loss = -torch.nn.functional.logsigmoid(-beta_dpo * (diff_p + ref_factor * reg_term))
+                    #loss = -torch.nn.functional.logsigmoid(-beta_dpo * (diff_p + ref_factor * reg_term))
 
                     #TODO try with reg_factor 0
                     #TODO try with logsigmoid on model_loss_p
