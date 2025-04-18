@@ -625,18 +625,7 @@ class GenericTrainer(BaseTrainer):
             orig_list = list(self.data_loader.get_data_loader())
             batch_list = []
             for batch in orig_list:
-                assert len(batch['image_path']) == 1
-                if "positive" in batch['image_path'][0]:
-                    negative_path = batch['image_path'][0].replace("positive","negative")
-                    negatives = [item for item in orig_list
-                        if item['image_path'][0] == negative_path
-                        and batch['latent_image'][0].shape == item['latent_image'][0].shape
-                    ]
-                    if len(negatives) == 1:
-                        batch_list.append(batch)
-                        batch_list.append(negatives[0])
-                    else:
-                        print("dropping ", batch['image_path'][0])
+                batch_list.append(batch)
 
             step_tqdm = tqdm(batch_list, desc="step", total=current_epoch_length,
                              initial=train_progress.epoch_step)
