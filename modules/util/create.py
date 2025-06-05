@@ -145,6 +145,8 @@ from diffusers import (
     UniPCMultistepScheduler,
 )
 
+from muon import SingleDeviceMuon
+
 
 def create_model_loader(
         model_type: ModelType,
@@ -453,17 +455,24 @@ def create_optimizer(
 
         # SGD Optimizer
         case Optimizer.SGD:
-            optimizer = torch.optim.SGD(
+            print("Using Muon instead of SGD")
+            optimizer = SingleDeviceMuon(
                 params=parameters,
                 lr=config.learning_rate,
-                momentum=optimizer_config.momentum if optimizer_config.momentum is not None else 0,
-                dampening=optimizer_config.dampening if optimizer_config.dampening is not None else 0,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
-                nesterov=optimizer_config.nesterov if optimizer_config.nesterov is not None else False,
-                foreach=optimizer_config.foreach if optimizer_config.foreach is not None else False,
-                maximize=optimizer_config.maximize if optimizer_config.maximize is not None else False,
-                differentiable=optimizer_config.differentiable if optimizer_config.differentiable is not None else False,
+                momentum=optimizer_config.momentum if optimizer_config.momentum is not None else 0.95
             )
+            #optimizer = torch.optim.SGD(
+            #    params=parameters,
+            #    lr=config.learning_rate,
+            #    momentum=optimizer_config.momentum if optimizer_config.momentum is not None else 0,
+            #    dampening=optimizer_config.dampening if optimizer_config.dampening is not None else 0,
+            #    weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
+            #    nesterov=optimizer_config.nesterov if optimizer_config.nesterov is not None else False,
+            #    foreach=optimizer_config.foreach if optimizer_config.foreach is not None else False,
+            #    maximize=optimizer_config.maximize if optimizer_config.maximize is not None else False,
+            #    differentiable=optimizer_config.differentiable if optimizer_config.differentiable is not None else False,
+            #)
 
         # SGD_8BIT Optimizer
         case Optimizer.SGD_8BIT:
